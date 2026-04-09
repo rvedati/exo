@@ -137,6 +137,16 @@ def mlx_distributed_init(
                     finally:
                         sock.close()
 
+                # Stagger ring init: higher ranks wait briefly to let rank 0
+                # start accepting connections first. Fixes race where all
+                # nodes call mx.distributed.init simultaneously and some
+                # peers connect before rank 0 is listening.
+                if rank > 0:
+                    time.sleep(3)
+                    logger.info(
+                        f"Rank {rank}: waited 3s for rank 0 to start accepting"
+                    )
+
                 os.environ["MLX_HOSTFILE"] = coordination_file
                 os.environ["MLX_RANK"] = str(rank)
                 os.environ["MLX_RING_VERBOSE"] = "1"
