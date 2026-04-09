@@ -355,13 +355,13 @@ def _find_ip_prioritised(
         iface.ip_address: iface.interface_type for iface in other_network.interfaces
     }
 
-    # Ring should prioritise fastest connection. As a best-effort, we prioritise TB.
-    # TODO: Profile and get actual connection speeds.
+    # Ring should prioritise fastest wired connection.
+    # Thunderbolt deprioritised: not functional between Mac and non-Apple ARM64 (DGX Spark).
     if ring:
         priority = {
-            "thunderbolt": 0,
-            "maybe_ethernet": 1,
-            "ethernet": 2,
+            "maybe_ethernet": 0,
+            "ethernet": 1,
+            "thunderbolt": 2,
             "wifi": 3,
             "unknown": 4,
         }

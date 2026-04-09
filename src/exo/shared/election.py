@@ -15,7 +15,7 @@ from exo.utils.channels import Receiver, Sender
 from exo.utils.pydantic_ext import CamelCaseModel
 from exo.utils.task_group import TaskGroup
 
-DEFAULT_ELECTION_TIMEOUT = 3.0
+DEFAULT_ELECTION_TIMEOUT = 5.0
 
 
 class ElectionMessage(CamelCaseModel):
@@ -82,6 +82,8 @@ class Election:
         self._campaign_cancel_scope: CancelScope | None = None
         self._campaign_done: Event | None = None
         self._tg = TaskGroup()
+        self._last_connection_campaign: float = 0.0
+        self._last_election_settled: float = 0.0
 
     async def run(self):
         logger.info("Starting Election")
@@ -110,7 +112,10 @@ class Election:
 
     async def elect(self, em: ElectionMessage) -> None:
         logger.debug(f"Electing: {em}")
-        is_new_master = em.proposed_session != self.current_session
+        is_new_master = (
+            em.proposed_session.master_node_id
+            != self.current_session.master_node_id
+        )
         self.current_session = em.proposed_session
         logger.debug(f"Current session: {self.current_session}")
         await self._er_sender.send(
@@ -132,8 +137,16 @@ class Election:
                     logger.debug("Dropping message from ourselves")
                     # Drop messages from us (See exo.routing.router)
                     continue
-                # If a new round is starting, we participate
+                # If a new round is starting, we participate — unless we just settled
                 if message.clock > self.clock:
+                    if (
+                        anyio.current_time() - self._last_election_settled
+                        < DEFAULT_ELECTION_TIMEOUT * 2
+                    ):
+                        logger.debug(
+                            f"Suppressing campaign for clock {message.clock} (recently settled)"
+                        )
+                        continue
                     self.clock = message.clock
                     logger.debug(f"New clock: {self.clock}")
                     logger.debug("Starting new campaign")
@@ -157,6 +170,7 @@ class Election:
                 self._candidates.append(message)
 
     async def _connection_receiver(self) -> None:
+        connection_cooldown = DEFAULT_ELECTION_TIMEOUT * 3
         with self._cm_receiver as connection_messages:
             async for first in connection_messages:
                 # Delay after connection message for time to symmetrically setup
@@ -166,6 +180,13 @@ class Election:
                 logger.debug(
                     f"Connection messages received: {first} followed by {rest}"
                 )
+                # Cooldown: skip re-election if we recently ran one from a connection event
+                now = anyio.current_time()
+                if now - self._last_connection_campaign < connection_cooldown:
+                    logger.debug("Skipping connection-triggered campaign (cooldown)")
+                    continue
+                self._last_connection_campaign = now
+
                 logger.debug(f"Current clock: {self.clock}")
                 # These messages are strictly peer to peer
                 self.clock += 1
@@ -177,7 +198,6 @@ class Election:
                     self._campaign, candidates, DEFAULT_ELECTION_TIMEOUT
                 )
                 logger.debug("Campaign started")
-                logger.debug("Connection message added")
 
     async def _command_counter(self) -> None:
         with self._co_receiver as commands:
@@ -212,8 +232,6 @@ class Election:
 
                 logger.debug(f"Sleeping for {campaign_timeout} seconds")
                 await anyio.sleep(campaign_timeout)
-                # minor hack - rebroadcast status in case anyone has missed it.
-                await self._em_sender.send(status)
                 logger.debug("Woke up from sleep")
                 # add an anyio checkpoint - anyio.lowlevel.chekpoint() or checkpoint_if_cancelled() is preferred, but wasn't typechecking last I checked
                 await anyio.sleep(0)
@@ -240,6 +258,7 @@ class Election:
                 )
                 logger.debug("Sending election result")
                 await self.elect(elected)
+                self._last_election_settled = anyio.current_time()
                 logger.debug("Election result sent")
         except get_cancelled_exc_class():
             logger.debug(f"Election {clock} cancelled")

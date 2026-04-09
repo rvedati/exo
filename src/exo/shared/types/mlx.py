@@ -1,6 +1,7 @@
 """Shared types for MLX-related functionality."""
 
 from collections.abc import Sequence
+from typing import Any
 
 from mlx import core as mx
 from mlx import nn as nn
@@ -14,8 +15,10 @@ from mlx_lm.models.cache import (
 
 from exo.worker.engines.vllm.kv_cache import TorchKVCache
 
+# This list contains one cache entry per transformer layer.
+# Includes Any to accommodate TurboQuantKVCache without circular imports.
 MLXCacheType = Sequence[
-    KVCache | RotatingKVCache | QuantizedKVCache | ArraysCache | CacheList
+    KVCache | RotatingKVCache | QuantizedKVCache | ArraysCache | CacheList | Any
 ]
 
 KVCacheType = MLXCacheType | TorchKVCache

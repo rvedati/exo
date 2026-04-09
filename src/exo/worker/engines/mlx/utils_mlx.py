@@ -117,6 +117,26 @@ def mlx_distributed_init(
                     f"rank {rank} hostfile: {coordination_file} hosts: {hosts_json}"
                 )
 
+                # Pre-flight: verify neighbor IPs are reachable before blocking init
+                import socket
+
+                for idx, host in enumerate(hosts_for_node):
+                    if idx == rank or host.ip in ("198.51.100.1", "0.0.0.0"):
+                        continue
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.settimeout(5)
+                    try:
+                        sock.connect((host.ip, 22))  # SSH port as reachability probe
+                        logger.info(
+                            f"Rank {rank}: neighbor {idx} at {host.ip} reachable"
+                        )
+                    except OSError as e:
+                        logger.warning(
+                            f"Rank {rank}: neighbor {idx} at {host.ip} unreachable: {e}"
+                        )
+                    finally:
+                        sock.close()
+
                 os.environ["MLX_HOSTFILE"] = coordination_file
                 os.environ["MLX_RANK"] = str(rank)
                 os.environ["MLX_RING_VERBOSE"] = "1"

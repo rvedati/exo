@@ -15,7 +15,18 @@ from mlx_lm.tokenizer_utils import TokenizerWrapper
 
 from exo.shared.types.memory import Memory
 from exo.shared.types.mlx import KVCacheType, MLXCacheType, Model
-from exo.worker.engines.mlx.constants import CACHE_GROUP_SIZE, KV_CACHE_BITS
+from exo.worker.engines.mlx.constants import (
+    CACHE_GROUP_SIZE,
+    KV_CACHE_BACKEND,
+    KV_CACHE_BITS,
+    TURBOQUANT_FP16_LAYERS,
+    TURBOQUANT_K_BITS,
+    TURBOQUANT_V_BITS,
+)
+from exo.worker.engines.mlx.turboquant import (
+    make_turboquant_adaptive_cache,
+    make_turboquant_cache_from_template,
+)
 from exo.worker.runner.bootstrap import logger
 
 if TYPE_CHECKING:
@@ -375,20 +386,42 @@ def make_kv_cache(
 ) -> MLXCacheType:
     assert hasattr(model, "layers")
 
+    if max_kv_size is not None:
+        logger.info(f"Using rotating KV cache with {max_kv_size=} with {keep=}")
+        return [RotatingKVCache(max_size=max_kv_size, keep=keep) for _ in model.layers]
+
+    if KV_CACHE_BACKEND == "turboquant":
+        logger.info(
+            f"Using TurboQuant KV cache with key_bits={TURBOQUANT_K_BITS} value_bits={TURBOQUANT_V_BITS}"
+        )
+        return make_turboquant_cache_from_template(
+            model,
+            key_bits=TURBOQUANT_K_BITS,
+            value_bits=TURBOQUANT_V_BITS,
+        )
+
+    if KV_CACHE_BACKEND == "turboquant_adaptive":
+        logger.info(
+            f"Using TurboQuant adaptive KV cache with key_bits={TURBOQUANT_K_BITS} "
+            f"value_bits={TURBOQUANT_V_BITS} fp16_layers={TURBOQUANT_FP16_LAYERS}"
+        )
+        return make_turboquant_adaptive_cache(
+            model,
+            key_bits=TURBOQUANT_K_BITS,
+            value_bits=TURBOQUANT_V_BITS,
+            fp16_layers=TURBOQUANT_FP16_LAYERS,
+        )
+
     if hasattr(model, "make_cache"):
         logger.info("Using MLX LM's make cache")
         return model.make_cache()  # type: ignore
 
-    if max_kv_size is None:
-        if KV_CACHE_BITS is None:
-            logger.info("Using default KV cache")
-            return [KVCache() for _ in model.layers]
-        else:
-            logger.info("Using quantized KV cache")
-            return [
-                QuantizedKVCache(group_size=CACHE_GROUP_SIZE, bits=KV_CACHE_BITS)
-                for _ in model.layers
-            ]
+    if KV_CACHE_BITS is None:
+        logger.info("Using default KV cache")
+        return [KVCache() for _ in model.layers]
     else:
-        logger.info(f"Using rotating KV cache with {max_kv_size=} with {keep=}")
-        return [RotatingKVCache(max_size=max_kv_size, keep=keep) for _ in model.layers]
+        logger.info("Using quantized KV cache")
+        return [
+            QuantizedKVCache(group_size=CACHE_GROUP_SIZE, bits=KV_CACHE_BITS)
+            for _ in model.layers
+        ]
