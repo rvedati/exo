@@ -75,6 +75,15 @@ def _kill_runner(
         if (instance_id := runner.bound_instance.instance.instance_id) not in instances:
             return Shutdown(instance_id=instance_id, runner_id=runner_id)
 
+        # Don't kill a runner based on peer failure during init/warmup/loading phases.
+        # The peer may be slower to initialize (e.g. CUDA PTX JIT warmup) and will recover.
+        local_status = runner.status
+        if isinstance(
+            local_status,
+            (RunnerConnecting, RunnerLoading, RunnerWarmingUp),
+        ):
+            continue
+
         for (
             global_runner_id
         ) in runner.bound_instance.instance.shard_assignments.node_to_runner.values():
