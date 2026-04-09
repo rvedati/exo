@@ -138,13 +138,22 @@ class Election:
                     # Drop messages from us (See exo.routing.router)
                     continue
                 # If a new round is starting, we participate — unless we just settled
+                # AND the peer's standing is nearly identical to ours (true storm signal,
+                # e.g. 3-node ring startup where all nodes have seniority=0, commands_seen=0).
+                # Legitimate tie-breakers or takeovers with different state proceed normally.
                 if message.clock > self.clock:
-                    if (
+                    time_since_settled = (
                         anyio.current_time() - self._last_election_settled
-                        < DEFAULT_ELECTION_TIMEOUT * 2
-                    ):
+                    )
+                    storm_signal = (
+                        time_since_settled < DEFAULT_ELECTION_TIMEOUT * 2
+                        and message.seniority == self.seniority
+                        and abs(message.commands_seen - self.commands_seen) <= 1
+                    )
+                    if storm_signal:
                         logger.debug(
-                            f"Suppressing campaign for clock {message.clock} (recently settled)"
+                            f"Suppressing campaign for clock {message.clock} "
+                            f"(recently settled, identical state — likely storm)"
                         )
                         continue
                     self.clock = message.clock
